@@ -1,23 +1,9 @@
 #!/usr/bin/env python3
 """
 US Visa Appointment Slot Checker — Ethiopia (AIS)
-Uses Selenium with undetected-chromedriver to log in and monitor slots.
-Sends SMS via Twilio when an earlier date is found.
+Monitors ais.usvisa-info.com and sends an SMS when an earlier slot appears.
 
-MODES:
-  --mode unpaid  → Logged in but fee not paid. Scrapes the earliest available
-                   date shown on the post-login page.
-  --mode paid    → Fee paid. Calls the appointment JSON API using your
-                   schedule ID to check available calendar dates.
-
-SETUP:
-  pip install -r requirements.txt
-
-USAGE:
-  python3 visa_checker.py --mode unpaid
-  python3 visa_checker.py --mode unpaid --current-date 2026-12-31
-  python3 visa_checker.py --mode paid --schedule-id 12345678
-  python3 visa_checker.py --mode paid --schedule-id 12345678 --current-date 2026-12-31
+See README.md for full setup and usage instructions.
 """
 
 import argparse
@@ -52,8 +38,15 @@ NIV_HOME    = f"{BASE_URL}/niv"
 AIS_EMAIL    = os.getenv("AIS_EMAIL", "")
 AIS_PASSWORD = os.getenv("AIS_PASSWORD", "")
 
-# Facility ID for Addis Ababa
-FACILITY_ID = int(os.getenv("FACILITY_ID", "95"))
+# Schedule ID — priority: --schedule-id flag → this env var → auto-detect
+# Useful to set when your account has multiple groups.
+SCHEDULE_ID = int(os.getenv("SCHEDULE_ID", "0"))
+
+# Facility ID for Addis Ababa — required for paid mode.
+# Priority: --facility-id flag → FACILITY_ID in .env → error
+# Find it by inspecting the location dropdown on the AIS reschedule page:
+#   right-click the consulate dropdown → Inspect → <option value="???">Addis Ababa</option>
+FACILITY_ID = int(os.getenv("FACILITY_ID", "0"))
 
 # Twilio — https://console.twilio.com
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -171,7 +164,7 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────
-# EXTRACT CSRF TOKEN (needed for JSON API calls via requests)
+# EXTRACT CSRF TOKEN
 # ─────────────────────────────────────────────────────────────────
 
 def get_csrf_token(driver: uc.Chrome) -> Optional[str]:
@@ -185,18 +178,19 @@ def get_csrf_token(driver: uc.Chrome) -> Optional[str]:
 
 # ─────────────────────────────────────────────────────────────────
 # MODE 1 — UNPAID
-# After login, the page shows a message with the earliest available date.
-# We scrape that text.
+# The /payment page shows the earliest available appointment date
+# to users who haven't paid yet.
 # ─────────────────────────────────────────────────────────────────
 
-def check_unpaid(driver: uc.Chrome) -> Optional[str]:
+def check_unpaid(driver: uc.Chrome, schedule_id: int) -> Optional[str]:
     """
-    Navigates to the NIV home / applicant summary after login and looks for
-    the 'earliest available date' message that AIS shows to unpaid users.
+    Navigates to the payment page (e.g. /en-et/niv/schedule/73783417/payment)
+    which shows the earliest available appointment date to unpaid users.
     Returns a date string (YYYY-MM-DD) if found, else None.
     """
-    log.info("[UNPAID] Loading applicant summary page...")
-    driver.get(NIV_HOME)
+    payment_url = f"{BASE_URL}/niv/schedule/{schedule_id}/payment"
+    log.info(f"[UNPAID] Loading payment page: {payment_url}")
+    driver.get(payment_url)
     time.sleep(3)
 
     page = driver.page_source
@@ -206,9 +200,9 @@ def check_unpaid(driver: uc.Chrome) -> Optional[str]:
     # We try several patterns to be resilient to wording changes.
     patterns = [
         r"(\d{1,2}\s+\w+,?\s*\d{4})",   # "11 August, 2026" or "11 August 2026"
-        r"(?:earliest|first available|available appointment)[^\d]*(\w+ \d{1,2},?\s*\d{4})",  # "August 11, 2026"
-        r"(\d{4}-\d{2}-\d{2})",   # ISO date fallback (2026-08-11)
-        r"(\d{1,2}/\d{1,2}/\d{4})",  # US format fallback (08/11/2026)
+        r"(?:earliest|first available|available appointment)[^\d]*(\w+ \d{1,2},?\s*\d{4})",
+        r"(\d{4}-\d{2}-\d{2})",          # ISO fallback: 2026-08-11
+        r"(\d{1,2}/\d{1,2}/\d{4})",      # US format fallback: 08/11/2026
     ]
 
     for pat in patterns:
@@ -220,8 +214,8 @@ def check_unpaid(driver: uc.Chrome) -> Optional[str]:
                 log.info(f"[UNPAID] Found date on page: {raw} → {parsed}")
                 return str(parsed)
 
-    # If no date found in text, dump a snippet for debugging
-    log.warning("[UNPAID] Could not find date on page. Saving page snippet to unpaid_debug.html")
+    # Save page for debugging if nothing matched
+    log.warning("[UNPAID] Could not find date on page. Saving to unpaid_debug.html")
     with open("unpaid_debug.html", "w", encoding="utf-8") as f:
         f.write(page)
     log.warning("Open unpaid_debug.html to inspect the page and update the regex pattern.")
@@ -253,7 +247,7 @@ def parse_date_flexible(raw: str) -> Optional[date]:
 # AIS calendar uses. Returns the earliest available date.
 # ─────────────────────────────────────────────────────────────────
 
-def check_paid(driver: uc.Chrome, schedule_id: int) -> Optional[str]:
+def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optional[list]:
     """
     Calls the AIS appointment days API using the browser's authenticated session.
     We inject a fetch() call into the page via JavaScript so the browser sends
@@ -261,7 +255,7 @@ def check_paid(driver: uc.Chrome, schedule_id: int) -> Optional[str]:
     """
     api_url = (
         f"{BASE_URL}/niv/schedule/{schedule_id}/appointment/"
-        f"days/{FACILITY_ID}.json?appointments[expedite]=false"
+        f"days/{facility_id}.json?appointments[expedite]=false"
     )
 
     # Navigate to the appointment page first so Referer header is correct
@@ -319,17 +313,21 @@ def check_paid(driver: uc.Chrome, schedule_id: int) -> Optional[str]:
         log.info("[PAID] No business-day slots available.")
         return None
 
-    earliest = min(available)
-    log.info(f"[PAID] Earliest available: {earliest}")
-    return earliest
+    available.sort()
+    log.info(f"[PAID] Available dates: {available}")
+    return available
 
 
 # ─────────────────────────────────────────────────────────────────
-# EXTRACT SCHEDULE ID FROM PAGE (paid mode helper)
+# AUTO-DETECT SCHEDULE ID
 # ─────────────────────────────────────────────────────────────────
 
 def extract_schedule_id(driver: uc.Chrome) -> Optional[int]:
-    """Pulls the schedule ID from any link in the dashboard that contains it."""
+    """
+    Pulls the schedule ID from any link in the dashboard that contains it.
+    Works for both paid and unpaid users since the schedule ID is assigned
+    at account creation, before payment.
+    """
     links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/schedule/']")
     for link in links:
         href = link.get_attribute("href") or ""
@@ -349,10 +347,14 @@ def main():
     parser = argparse.ArgumentParser(description="US Visa Slot Checker — Ethiopia")
     parser.add_argument("--mode", choices=["unpaid", "paid"], required=True)
     parser.add_argument("--current-date", required=False, default=None,
-                        help="Your current appointment date YYYY-MM-DD (only for paid mode)")
+                        help="Your current appointment date YYYY-MM-DD (only for paid mode — "
+                             "alerts when an earlier slot is found)")
     parser.add_argument("--schedule-id", type=int, default=None,
-                        help="(Paid mode) Your schedule ID from the AIS URL. "
-                             "If omitted, the script tries to auto-detect it after login.")
+                        help="Schedule ID (priority: flag → SCHEDULE_ID env → auto-detect). "
+                             "Useful when your account has multiple groups.")
+    parser.add_argument("--facility-id", type=int, default=None,
+                        help="Consulate facility ID for paid mode (priority: flag → FACILITY_ID env). "
+                             "Find it by inspecting the location dropdown on the AIS reschedule page.")
     parser.add_argument("--interval", type=int, default=CHECK_INTERVAL,
                         help=f"Seconds between checks (default: {CHECK_INTERVAL})")
     parser.add_argument("--no-headless", action="store_true",
@@ -380,27 +382,46 @@ def main():
 
     headless = not args.no_headless
     driver = make_driver(headless=headless)
-    wait = WebDriverWait(driver, 20)
 
     # --- LOGIN ---
     if not login(driver, AIS_EMAIL, AIS_PASSWORD):
         driver.quit()
         sys.exit(1)
 
-    # --- AUTO-DETECT SCHEDULE ID (paid mode) ---
-    schedule_id = args.schedule_id
-    if args.mode == "paid" and not schedule_id:
+    # --- RESOLVE SCHEDULE ID: flag → env → auto-detect ---
+    schedule_id = (
+        args.schedule_id
+        or int(os.getenv("SCHEDULE_ID", "0")) or None
+    )
+    if not schedule_id:
         schedule_id = extract_schedule_id(driver)
         if not schedule_id:
             log.error(
-                "Could not auto-detect schedule ID. "
-                "Pass it explicitly with --schedule-id XXXXXXXX\n"
-                "Find it in your AIS URL: .../schedule/XXXXXXXX/appointment"
+                "Could not resolve schedule ID.\n"
+                "Options: --schedule-id XXXXXXXX  |  SCHEDULE_ID=XXXXXXXX in .env\n"
+                "Find it in your AIS URL after login: .../schedule/XXXXXXXX/..."
             )
             driver.quit()
             sys.exit(1)
+    log.info(f"Using schedule ID: {schedule_id}")
 
-    last_alerted: Optional[str] = None
+    # --- RESOLVE FACILITY ID: flag → env → error (paid mode only) ---
+    facility_id = None
+    if args.mode == "paid":
+        facility_id = args.facility_id or FACILITY_ID or None
+        if not facility_id:
+            log.error(
+                "Facility ID is required for paid mode.\n"
+                "Options: --facility-id XXXXX  |  FACILITY_ID=XXXXX in .env\n"
+                "Find it by inspecting the location dropdown on the AIS reschedule page."
+            )
+            driver.quit()
+            sys.exit(1)
+        log.info(f"Using facility ID: {facility_id}")
+
+    # In-memory dedupe only (avoid repeat SMS each cycle for the same earliest date)
+    last_unpaid_alerted: Optional[str] = None
+    last_paid_earliest_alerted: Optional[str] = None
 
     # --- MAIN LOOP ---
     while True:
@@ -415,50 +436,59 @@ def main():
 
             # Check depending on mode
             if args.mode == "unpaid":
-                earliest_str = check_unpaid(driver)
-            else:
-                earliest_str = check_paid(driver, schedule_id)
+                earliest_str = check_unpaid(driver, schedule_id)
 
-            if earliest_str:
-                earliest = datetime.strptime(earliest_str, "%Y-%m-%d").date()
-
-                # For unpaid mode, send SMS when date changes
-                if args.mode == "unpaid":
-                    if earliest_str != last_alerted:
+                if earliest_str:
+                    if earliest_str != last_unpaid_alerted:
                         message = (
                             f"🚨 VISA APPOINTMENT AVAILABLE — Ethiopia\n"
                             f"Earliest available: {earliest_str}\n"
-                            f"Book now → {BASE_URL}/niv"
+                            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/payment"
                         )
                         log.info(f"NEW DATE! {earliest_str}")
                         send_sms(message)
-                        last_alerted = earliest_str
+                        last_unpaid_alerted = earliest_str
                     else:
                         log.info(f"Date unchanged: {earliest_str}")
-                
-                # For paid mode with current_date, check if earlier and alert
-                elif args.mode == "paid" and current_date and earliest < current_date and earliest_str != last_alerted:
-                    days_earlier = (current_date - earliest).days
-                    message = (
-                        f"🚨 VISA SLOT ALERT — Ethiopia\n"
-                        f"Earlier slot found: {earliest_str}\n"
-                        f"({days_earlier} days earlier than your current appt: {current_date})\n"
-                        f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
-                    )
-                    log.info(f"ALERT! Earlier slot: {earliest_str} ({days_earlier} days earlier)")
-                    send_sms(message)
-                    last_alerted = earliest_str
-
-                elif earliest_str == last_alerted:
-                    log.info(f"Already alerted for {earliest_str}. No SMS.")
-
                 else:
-                    if args.mode == "paid" and current_date:
-                        log.info(f"No earlier slot. Earliest available: {earliest_str}")
-                    elif args.mode == "paid":
-                        log.info(f"Earliest available: {earliest_str}")
+                    log.info("No date found this cycle.")
+
             else:
-                log.info("No date found this cycle.")
+                available = check_paid(driver, schedule_id, facility_id)
+
+                earliest_str: Optional[str] = None
+                if available:
+                    slots = list(available)
+                    if current_date:
+                        slots = [
+                            d for d in available
+                            if datetime.strptime(d, "%Y-%m-%d").date() < current_date
+                        ]
+                        if not slots:
+                            log.info(
+                                "No slots earlier than %s. Earliest overall: %s",
+                                current_date,
+                                available[0],
+                            )
+                        else:
+                            earliest_str = slots[0]
+                    else:
+                        earliest_str = available[0]
+
+                if earliest_str:
+                    if earliest_str != last_paid_earliest_alerted:
+                        message = (
+                            f"🚨 VISA SLOTS AVAILABLE — Ethiopia\n"
+                            f"Earliest available: {earliest_str}\n"
+                            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
+                        )
+                        log.info(f"ALERT! Earliest qualifying slot: {earliest_str}")
+                        send_sms(message)
+                        last_paid_earliest_alerted = earliest_str
+                    else:
+                        log.info(f"Earliest unchanged: {earliest_str}")
+                elif not available:
+                    log.info("No available slots this cycle.")
 
         except KeyboardInterrupt:
             log.info("Stopped by user.")
