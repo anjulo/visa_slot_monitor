@@ -1,7 +1,6 @@
-import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 import requests
@@ -13,7 +12,6 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-EARLIEST_DATE_FILE = "earliest_date.json"
 
 log = logging.getLogger(__name__)
 
@@ -40,33 +38,6 @@ def format_date(d: date, current_date: Optional[date] = None) -> str:
     return f"{parts[0]}  ({' · '.join(parts[1:])})"
 
 
-def load_earliest(mode: str) -> Optional[date]:
-    """Load the previously recorded earliest date from disk for this mode."""
-    try:
-        with open(EARLIEST_DATE_FILE, encoding="utf-8") as handle:
-            data = json.load(handle)
-        raw = data.get(mode)
-        return datetime.strptime(raw, "%Y-%m-%d").date() if raw else None
-    except (FileNotFoundError, KeyError, ValueError):
-        return None
-
-
-def save_earliest(mode: str, d: Optional[date]) -> None:
-    """Persist the current earliest date to disk for this mode."""
-    try:
-        try:
-            with open(EARLIEST_DATE_FILE, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (FileNotFoundError, ValueError):
-            data = {}
-
-        data[mode] = d.isoformat() if d else None
-        with open(EARLIEST_DATE_FILE, "w", encoding="utf-8") as handle:
-            json.dump(data, handle)
-    except Exception as exc:
-        log.warning("Could not save earliest date: %s", exc)
-
-
 def alert_if_changed(
     new_val: Optional[date],
     last_val: Optional[date],
@@ -75,7 +46,7 @@ def alert_if_changed(
     current_date: Optional[date] = None,
 ) -> Optional[date]:
     """
-    Compare new_val to last_val, alert on changes, and persist the new value.
+    Compare new_val to last_val, alert on changes, and return the latest value.
     """
     if new_val == last_val:
         if new_val:
@@ -110,5 +81,4 @@ def alert_if_changed(
             )
         )
 
-    save_earliest("slot", new_val)
     return new_val

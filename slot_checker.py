@@ -81,7 +81,6 @@ def _fetch_paid_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional
     and return the earliest available business-day slot.
     """
     if not facility_id:
-        log.error("Facility ID is required for paid mode.")
         return None
 
     api_url = (

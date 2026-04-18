@@ -1,8 +1,6 @@
 import logging
 import os
-import sys
 import time
-from typing import Optional
 
 from dotenv import load_dotenv
 import undetected_chromedriver as uc
@@ -28,27 +26,6 @@ def navigate(driver: uc.Chrome, url: str, wait_seconds: int = 3) -> None:
     """Navigate to a URL and wait for the page to settle."""
     driver.get(url)
     time.sleep(wait_seconds)
-
-
-def resolve_id(
-    flag_val: Optional[int],
-    env_val: int,
-    name: str,
-    required: bool = True,
-    driver: Optional[uc.Chrome] = None,
-) -> Optional[int]:
-    """
-    Resolve an integer ID using: flag -> env -> error.
-    Quit the driver and exit if required and not found.
-    """
-    value = flag_val or env_val or None
-    if not value and required:
-        log.error("%s is required. Pass --%s or set it in .env", name, name.lower().replace(" ", "-"))
-        if driver:
-            driver.quit()
-        sys.exit(1)
-    log.debug("Using %s: %s", name, value)
-    return value
 
 
 def make_driver(headless: bool = True) -> uc.Chrome:

@@ -13,7 +13,7 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, alert_if_changed, load_earliest
+from alerts_and_state import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, alert_if_changed
 from browser_session import (
     AIS_EMAIL,
     AIS_PASSWORD,
@@ -22,7 +22,6 @@ from browser_session import (
     SCHEDULE_ID,
     login,
     make_driver,
-    resolve_id,
 )
 from slot_checker import check_slots
 
@@ -36,19 +35,6 @@ def main() -> None:
         required=False,
         default=None,
         help="Your current appointment date YYYY-MM-DD (only for paid mode — alerts when an earlier slot is found)",
-    )
-    parser.add_argument(
-        "--schedule-id",
-        type=int,
-        default=None,
-        help="Schedule ID (priority: flag -> SCHEDULE_ID env).",
-    )
-    parser.add_argument(
-        "--facility-id",
-        type=int,
-        default=None,
-        help="Consulate facility ID for paid mode (priority: flag -> FACILITY_ID env). "
-        "Find it by inspecting the location dropdown on the AIS reschedule page.",
     )
     parser.add_argument(
         "--interval",
@@ -89,6 +75,9 @@ def main() -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env")
         sys.exit(1)
+    if not SCHEDULE_ID:
+        log.error("SCHEDULE_ID must be set in .env")
+        sys.exit(1)
 
     log.info("=" * 60)
     log.info("  US Visa Slot Checker — Ethiopia (AIS)")
@@ -106,12 +95,10 @@ def main() -> None:
         driver.quit()
         sys.exit(1)
 
-    schedule_id = resolve_id(args.schedule_id, SCHEDULE_ID, "Schedule ID", driver=driver)
-    facility_id = args.facility_id or FACILITY_ID or None
+    schedule_id = SCHEDULE_ID
+    facility_id = FACILITY_ID or None
 
-    last_alerted = load_earliest("slot")
-    if last_alerted:
-        log.info("Restored persisted earliest: %s", last_alerted)
+    last_alerted: Optional[date] = None
 
     while True:
         try:
@@ -123,6 +110,11 @@ def main() -> None:
                     continue
 
             earliest_date, detected_mode = check_slots(driver, schedule_id, facility_id)
+
+            if detected_mode == "paid" and not facility_id:
+                log.error("FACILITY_ID is required in .env")
+                driver.quit()
+                sys.exit(1)
 
             if detected_mode == "paid" and earliest_date and current_date and earliest_date >= current_date:
                 log.info("No slots earlier than %s. Earliest overall: %s", current_date, earliest_date)
@@ -144,7 +136,7 @@ def main() -> None:
         except Exception as exc:
             log.error("Unexpected error: %s", exc)
 
-        log.debug("Sleeping %ss...\n", args.interval)
+        log.info("Sleeping %ss...\n", args.interval)
         time.sleep(args.interval)
 
     driver.quit()

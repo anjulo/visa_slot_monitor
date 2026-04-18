@@ -24,5 +24,3 @@ __pycache__/
 # OS
 .DS_Store
 
-# disk storage
-earliest_date.json

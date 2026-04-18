@@ -56,19 +56,18 @@ Environment variables are described inline in [`.env.example`](.env.example). Co
 
 ```bash
 # Monitor your schedule and auto-detect unpaid vs paid flow
-python3 visa_slot_monitor.py --schedule-id 12345678
+python3 visa_slot_monitor.py
 
 # Only alert if a slot is earlier than your current appointment
-python3 visa_slot_monitor.py --schedule-id 12345678 --current-date 2026-12-31
+python3 visa_slot_monitor.py --current-date 2026-12-31
 ```
 
-Set `FACILITY_ID` in `.env` for paid-flow checks. (`SCHEDULE_ID` can be set in `.env` too if you want to omit `--schedule-id`.)
+Set both `SCHEDULE_ID` and `FACILITY_ID` in `.env`. `FACILITY_ID` is required when paid mode is detected.
 
 ## All flags
 
 | Flag | Description |
 |---|---|
-| `--schedule-id` | Schedule ID (priority: flag → `SCHEDULE_ID` env). Required. |
 | `--current-date` | `YYYY-MM-DD`. If set, alerts only for slots earlier than this date. |
 | `--interval` | Seconds between checks. |
 | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`). |
