@@ -4,11 +4,13 @@ Monitors [ais.usvisa-info.com/en-et](https://ais.usvisa-info.com/en-et) and send
 
 ---
 
-## Modes
+## Flows
 
-**`unpaid`** — Fee not paid yet. Watches the earliest available date shown on your payment page and sends you a Telegram message whenever it changes.
+The script auto-detects which flow your account is in:
 
-**`paid`** — Fee paid. Calls the AIS calendar API and sends you a Telegram message when the earliest open slot changes (message includes that single earliest date).
+**Unpaid** — Fee not paid yet. Watches the earliest available date shown on your payment page and sends a Telegram message whenever it changes.
+
+**Paid** — Fee paid. Calls the AIS calendar API and sends a Telegram message when the earliest open slot changes.
 
 If you have a current appointment and only want to be alerted for earlier slots, pass `--current-date`.
 
@@ -53,26 +55,21 @@ Environment variables are described inline in [`.env.example`](.env.example). Co
 ## Usage
 
 ```bash
-# Unpaid mode
-python3 visa_checker.py --mode unpaid --schedule-id 12345678
+# Monitor your schedule and auto-detect unpaid vs paid flow
+python3 visa_slot_monitor.py --schedule-id 12345678
 
-# Paid mode — alerts when the earliest open slot changes
-python3 visa_checker.py --mode paid --schedule-id 12345678 --facility-id 100
-
-# Paid mode — only alert if a slot is earlier than your current appointment
-python3 visa_checker.py --mode paid --schedule-id 12345678 --facility-id 100 --current-date 2026-12-31
+# Only alert if a slot is earlier than your current appointment
+python3 visa_slot_monitor.py --schedule-id 12345678 --current-date 2026-12-31
 ```
 
-Alternatively, set `SCHEDULE_ID` and `FACILITY_ID` in `.env` and omit the flags.
+Set `FACILITY_ID` in `.env` for paid-flow checks. (`SCHEDULE_ID` can be set in `.env` too if you want to omit `--schedule-id`.)
 
 ## All flags
 
 | Flag | Description |
 |---|---|
-| `--mode` | `unpaid` or `paid` — required |
 | `--schedule-id` | Schedule ID (priority: flag → `SCHEDULE_ID` env). Required. |
-| `--current-date` | `YYYY-MM-DD`. Paid mode only. If set, alerts only for slots earlier than this date. |
-| `--facility-id` | Facility ID (paid mode). Required for paid mode. |
+| `--current-date` | `YYYY-MM-DD`. If set, alerts only for slots earlier than this date. |
 | `--interval` | Seconds between checks. |
 | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`). |
 | `--no-headless` | Show the browser window. Useful if login keeps failing. |
