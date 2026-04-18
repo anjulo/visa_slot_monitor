@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 """
 US Visa Appointment Slot Checker — Ethiopia (AIS)
 Monitors ais.usvisa-info.com and sends a Telegram message when an earlier slot appears.
@@ -38,7 +38,7 @@ NIV_HOME    = f"{BASE_URL}/niv"
 AIS_EMAIL    = os.getenv("AIS_EMAIL", "")
 AIS_PASSWORD = os.getenv("AIS_PASSWORD", "")
 
-# Schedule ID — priority: --schedule-id flag → this env var → auto-detect
+# Schedule ID — priority: --schedule-id flag → this env var → error
 # Useful to set when your account has multiple groups.
 SCHEDULE_ID = int(os.getenv("SCHEDULE_ID", "0"))
 
@@ -77,6 +77,111 @@ def send_telegram(body: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────
+
+def navigate(driver: uc.Chrome, url: str, wait_seconds: int = 3) -> None:
+    """Navigate to a URL and wait for the page to settle."""
+    driver.get(url)
+    time.sleep(wait_seconds)
+
+
+def resolve_id(flag_val: Optional[int], env_val: int, name: str,
+               required: bool = True, driver: Optional[uc.Chrome] = None) -> Optional[int]:
+    """
+    Resolves an integer ID using: flag → env → error.
+    Quits the driver and exits if required and not found.
+    """
+    value = flag_val or env_val or None
+    if not value and required:
+        log.error(f"{name} is required. Pass --{name.lower().replace(' ', '-')} or set it in .env")
+        if driver:
+            driver.quit()
+        sys.exit(1)
+    log.debug(f"Using {name}: {value}")
+    return value
+
+
+def format_date(d: date, current_date: Optional[date] = None) -> str:
+    """
+    Returns a human-readable date string with contextual info:
+      Wednesday, August 11, 2026  (in 116 days · 47 days earlier than your appointment)
+    """
+    days_from_now = (d - date.today()).days
+    parts = [d.strftime("%A, %B %d, %Y"), f"in {days_from_now} days"]
+    if current_date:
+        diff = (current_date - d).days
+        parts.append(f"{diff} days earlier than your appointment")
+    return f"{parts[0]}  ({' · '.join(parts[1:])})"
+
+
+EARLIEST_DATE_FILE = "earliest_date.json"
+
+
+def load_earliest(mode: str) -> Optional[date]:
+    """Load the previously recorded earliest date from disk for this mode."""
+    try:
+        with open(EARLIEST_DATE_FILE) as f:
+            data = json.load(f)
+        raw = data.get(mode)
+        return datetime.strptime(raw, "%Y-%m-%d").date() if raw else None
+    except (FileNotFoundError, KeyError, ValueError):
+        return None
+
+
+def save_earliest(mode: str, d: Optional[date]) -> None:
+    """Persist the current earliest date to disk for this mode."""
+    try:
+        try:
+            with open(EARLIEST_DATE_FILE) as f:
+                data = json.load(f)
+        except (FileNotFoundError, ValueError):
+            data = {}
+        data[mode] = d.isoformat() if d else None
+        with open(EARLIEST_DATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log.warning(f"Could not save earliest date: {e}")
+
+
+def alert_if_changed(new_val: Optional[date], last_val: Optional[date], mode: str,
+                     schedule_id: int,
+                     current_date: Optional[date] = None) -> Optional[date]:
+    """
+    Compares new_val to last_val (persisted across restarts via disk).
+    Alerts with a direction-aware message — 'earlier' (good) or 'later' (worse).
+    Returns new_val and saves it to disk if changed.
+    """
+    if new_val == last_val:
+        if new_val:
+            log.debug(f"Earliest slot unchanged: {new_val}")
+        return last_val
+
+    if new_val and last_val:
+        direction = "earlier 🟢" if new_val < last_val else "later 🔴"
+        log.info(f"ALERT! Earliest slot moved {direction}: {last_val} → {new_val}")
+    elif new_val:
+        log.info(f"ALERT! Earliest slot first seen: {new_val}")
+    else:
+        log.info(f"Earliest slot disappeared — no slots available")
+
+    if new_val:
+        direction = (
+            f"🟢 Moved earlier from {last_val.strftime('%b %d')}!\n" if last_val and new_val < last_val
+            else f"🔴 Moved later from {last_val.strftime('%b %d')}.\n" if last_val
+            else ""
+        )
+        send_telegram(
+            f"🚨 VISA APPOINTMENT — Ethiopia\n"
+            f"{direction}"
+            f"{format_date(new_val, current_date)}\n\n"
+            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/{'payment' if mode == 'unpaid' else 'appointment'}"
+        )
+
+    save_earliest(mode, new_val)
+    return new_val
+
+# ─────────────────────────────────────────────────────────────────
 # BROWSER SETUP
 # ─────────────────────────────────────────────────────────────────
 
@@ -111,10 +216,10 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
     log.info("Navigating to login page...")
     driver.get(LOGIN_URL)
     time.sleep(3)
-    
+
     try:
         log.info(f"Page loaded. Title: {driver.title}, URL: {driver.current_url}")
-        
+
         wait = WebDriverWait(driver, 20)
 
         # Fill email
@@ -135,7 +240,7 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
         try:
             checkbox = driver.find_element(By.ID, "policy_confirmed")
             log.info(f"Checkbox found. Currently selected: {checkbox.is_selected()}")
-            
+
             # Ensure checkbox is always clicked
             # Use JavaScript click as a fallback if regular click doesn't work
             if not checkbox.is_selected():
@@ -146,13 +251,13 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
                     log.info("Checkbox click via Selenium failed, trying JavaScript...")
                     driver.execute_script("arguments[0].click();", checkbox)
                     log.info("✓ Clicked checkbox with JavaScript")
-            
+
             time.sleep(0.5)
             if not checkbox.is_selected():
                 log.warning("Checkbox still not selected after click. Trying again...")
                 driver.execute_script("arguments[0].checked = true;", checkbox)
                 log.info("✓ Set checkbox to checked via JavaScript")
-                
+
         except Exception as e:
             log.error(f"Checkbox error: {e}")
             pass
@@ -215,10 +320,7 @@ def check_unpaid(driver: uc.Chrome, schedule_id: int) -> Optional[date]:
     which shows the earliest available appointment date to unpaid users.
     Returns a date object if found, else None.
     """
-    payment_url = f"{BASE_URL}/niv/schedule/{schedule_id}/payment"
-    log.debug(f"[UNPAID] Loading payment page: {payment_url}")
-    driver.get(payment_url)
-    time.sleep(3)
+    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/payment")
 
     page = driver.page_source
 
@@ -268,11 +370,10 @@ def parse_date_flexible(raw: str) -> Optional[date]:
     return None
 
 
-
 # ─────────────────────────────────────────────────────────────────
 # MODE 2 — PAID
 # Uses the Selenium session's cookies to call the JSON API that the
-# AIS calendar uses. Returns the earliest available date.
+# AIS calendar uses. Returns all available dates.
 # ─────────────────────────────────────────────────────────────────
 
 def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optional[list[date]]:
@@ -287,36 +388,26 @@ def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optiona
     )
 
     # Navigate to the appointment page first so Referer header is correct
-    appt_page = f"{BASE_URL}/niv/schedule/{schedule_id}/appointment"
-    log.debug(f"[PAID] Loading appointment page: {appt_page}")
-    driver.get(appt_page)
-    time.sleep(2)
-
+    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
     log.debug(f"[PAID] Calling API: {api_url}")
 
     # Execute fetch() in the browser context — it carries all session cookies
-    js = f"""
-        return new Promise((resolve, reject) => {{
-            fetch("{api_url}", {{
-                headers: {{
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "X-Requested-With": "XMLHttpRequest"
-                }},
-                credentials: "include"
-            }})
-            .then(r => r.text())
-            .then(resolve)
-            .catch(e => reject(e.toString()));
-        }});
-    """
-
     try:
         result = driver.execute_async_script(
             """
-            var callback = arguments[arguments.length - 1];
-            """ + js.replace("return new Promise", "new Promise") +
-            """.then(callback).catch(callback);
-            """
+            const [url, callback] = arguments;
+            fetch(url, {
+                headers: {
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                credentials: "include"
+            })
+            .then(r => r.text())
+            .then(callback)
+            .catch(e => callback(null));
+            """,
+            api_url
         )
     except Exception as e:
         log.error(f"[PAID] JS fetch error: {e}")
@@ -345,7 +436,7 @@ def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optiona
                 available.append(d)
             except (ValueError, TypeError):
                 continue
-    
+
     if not available:
         log.info("[PAID] No business-day slots available.")
         return None
@@ -421,34 +512,20 @@ def main():
         driver.quit()
         sys.exit(1)
 
-    # --- RESOLVE SCHEDULE ID: flag → env ---
-    schedule_id = args.schedule_id or (int(os.getenv("SCHEDULE_ID", "0")) or None)
-    if not schedule_id:
-        log.error(
-            "Schedule ID is required.\n"
-            "Options: --schedule-id XXXXXXXX  |  SCHEDULE_ID=XXXXXXXX in .env"
-        )
-        driver.quit()
-        sys.exit(1)
-    log.debug(f"Using schedule ID: {schedule_id}")
+    # --- RESOLVE SCHEDULE ID: flag → env → error ---
+    schedule_id = resolve_id(args.schedule_id, SCHEDULE_ID, "Schedule ID", driver=driver)
 
     # --- RESOLVE FACILITY ID: flag → env → error (paid mode only) ---
-    facility_id = None
-    if args.mode == "paid":
-        facility_id = args.facility_id or FACILITY_ID or None
-        if not facility_id:
-            log.error(
-                "Facility ID is required for paid mode.\n"
-                "Options: --facility-id XXXXX  |  FACILITY_ID=XXXXX in .env\n"
-                "Find it by inspecting the location dropdown on the AIS reschedule page."
-            )
-            driver.quit()
-            sys.exit(1)
-        log.debug(f"Using facility ID: {facility_id}")
+    facility_id = resolve_id(args.facility_id, FACILITY_ID, "Facility ID",
+                             required=(args.mode == "paid"), driver=driver)
 
-    # In-memory dedupe only (avoid repeat messages each cycle for the same earliest date)
-    last_unpaid_alerted: Optional[date] = None
-    last_paid_earliest_alerted: Optional[date] = None
+    # In-memory dedupe, seeded from disk so restarts don't re-alert the same date
+    last_unpaid_alerted: Optional[date] = load_earliest("unpaid")
+    last_paid_alerted: Optional[date] = load_earliest("paid")
+    if last_unpaid_alerted:
+        log.info(f"Restored persisted unpaid earliest: {last_unpaid_alerted}")
+    if last_paid_alerted:
+        log.info(f"Restored persisted paid earliest: {last_paid_alerted}")
 
     # --- MAIN LOOP ---
     while True:
@@ -461,59 +538,35 @@ def main():
                     time.sleep(60)
                     continue
 
-            # Check depending on mode
             if args.mode == "unpaid":
                 earliest_date = check_unpaid(driver, schedule_id)
-
-                if earliest_date:
-                    if earliest_date != last_unpaid_alerted:
-                        readable_date = earliest_date.strftime("%B %d, %Y")
-                        message = (
-                            f"🚨 VISA APPOINTMENT AVAILABLE — Ethiopia\n"
-                            f"Earliest available: {readable_date}\n"
-                            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/payment"
-                        )
-                        log.info(f"NEW DATE! {readable_date}")
-                        send_telegram(message)
-                        last_unpaid_alerted = earliest_date
-                    else:
-                        log.debug(f"Date unchanged: {earliest_date}")
-                else:
-                    log.debug("No date found this cycle.")
+                last_unpaid_alerted = alert_if_changed(
+                    earliest_date,
+                    last_unpaid_alerted,
+                    "unpaid",
+                    schedule_id,
+                )
 
             else:
                 available = check_paid(driver, schedule_id, facility_id)
 
-                earliest_date: Optional[date] = None
+                earliest_date = None
                 if available:
-                    slots = list(available)
-                    if current_date:
-                        slots = [d for d in available if d < current_date]
-                        if not slots:
-                            log.info(
-                                "No slots earlier than %s. Earliest overall: %s",
-                                current_date,
-                                available[0],
-                            )
-                        else:
-                            earliest_date = slots[0]
+                    slots = [d for d in available if d < current_date] if current_date else available
+                    if current_date and not slots:
+                        log.info(f"No slots earlier than {current_date}. Earliest overall: {available[0]}")
                     else:
-                        earliest_date = available[0]
+                        earliest_date = slots[0]
 
-                if earliest_date:
-                    if earliest_date != last_paid_earliest_alerted:
-                        readable_date = earliest_date.strftime("%B %d, %Y")
-                        message = (
-                            f"🚨 VISA SLOTS AVAILABLE — Ethiopia\n"
-                            f"Earliest available: {readable_date}\n"
-                            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
-                        )
-                        log.info(f"ALERT! Earliest qualifying slot: {readable_date}")
-                        send_telegram(message)
-                        last_paid_earliest_alerted = earliest_date
-                    else:
-                        log.debug(f"Earliest unchanged: {earliest_date}")
-                elif not available:
+                last_paid_alerted = alert_if_changed(
+                    earliest_date,
+                    last_paid_alerted,
+                    "paid",
+                    schedule_id,
+                    current_date,
+                )
+
+                if not available:
                     log.debug("No available slots this cycle.")
 
         except KeyboardInterrupt:
