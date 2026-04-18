@@ -13,19 +13,19 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, alert_if_changed
-from browser_session import (
-    AIS_EMAIL,
-    AIS_PASSWORD,
-    CHECK_INTERVAL,
-    FACILITY_ID,
-    SCHEDULE_ID,
-    login,
-    make_driver,
-)
+from alerts_and_state import alert_if_changed
+from browser_session import login, make_driver
+from config import CONFIG
 from slot_checker import check_slots
 
 log = logging.getLogger(__name__)
+
+
+def _die(message: str, driver=None) -> None:
+    log.error(message)
+    if driver:
+        driver.quit()
+    sys.exit(1)
 
 
 def main() -> None:
@@ -39,8 +39,8 @@ def main() -> None:
     parser.add_argument(
         "--interval",
         type=int,
-        default=CHECK_INTERVAL,
-        help=f"Seconds between checks (default: {CHECK_INTERVAL})",
+        default=CONFIG.check_interval,
+        help=f"Seconds between checks (default: {CONFIG.check_interval})",
     )
     parser.add_argument(
         "--log-level",
@@ -69,15 +69,7 @@ def main() -> None:
         try:
             current_date = datetime.strptime(args.current_date, "%Y-%m-%d").date()
         except ValueError:
-            log.error("Invalid --current-date. Use YYYY-MM-DD format.")
-            sys.exit(1)
-
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env")
-        sys.exit(1)
-    if not SCHEDULE_ID:
-        log.error("SCHEDULE_ID must be set in .env")
-        sys.exit(1)
+            _die("Invalid --current-date. Use YYYY-MM-DD format.")
 
     log.info("=" * 60)
     log.info("  US Visa Slot Checker — Ethiopia (AIS)")
@@ -85,18 +77,17 @@ def main() -> None:
         log.info("  Current appt  : %s", current_date)
         log.info("  Alert if      : earlier than %s", current_date)
     log.info("  Check every   : %ss", args.interval)
-    log.info("  Telegram chat : %s", TELEGRAM_CHAT_ID)
+    log.info("  Telegram chat : %s", CONFIG.telegram_chat_id)
     log.info("=" * 60)
 
     driver = make_driver(headless=not args.no_headless)
 
     log.info("Logging in...")
-    if not login(driver, AIS_EMAIL, AIS_PASSWORD):
+    if not login(driver, CONFIG.ais_email, CONFIG.ais_password):
         driver.quit()
         sys.exit(1)
 
-    schedule_id = SCHEDULE_ID
-    facility_id = FACILITY_ID or None
+    facility_id = CONFIG.facility_id or None
 
     last_alerted: Optional[date] = None
 
@@ -104,17 +95,14 @@ def main() -> None:
         try:
             if "sign_in" in driver.current_url:
                 log.warning("Session expired. Re-logging in...")
-                if not login(driver, AIS_EMAIL, AIS_PASSWORD):
+                if not login(driver, CONFIG.ais_email, CONFIG.ais_password):
                     log.error("Re-login failed. Retrying in 60s.")
                     time.sleep(60)
                     continue
 
-            earliest_date, detected_mode = check_slots(driver, schedule_id, facility_id)
-
+            earliest_date, detected_mode = check_slots(driver, CONFIG.schedule_id, facility_id)
             if detected_mode == "paid" and not facility_id:
-                log.error("FACILITY_ID is required in .env")
-                driver.quit()
-                sys.exit(1)
+                _die("FACILITY_ID is required in .env", driver)
 
             if detected_mode == "paid" and earliest_date and current_date and earliest_date >= current_date:
                 log.info("No slots earlier than %s. Earliest overall: %s", current_date, earliest_date)
@@ -124,7 +112,7 @@ def main() -> None:
                 earliest_date,
                 last_alerted,
                 detected_mode,
-                schedule_id,
+                CONFIG.schedule_id,
                 current_date,
             )
 

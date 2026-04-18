@@ -6,7 +6,8 @@ from typing import Optional
 
 import undetected_chromedriver as uc
 
-from browser_session import BASE_URL, navigate
+from browser_session import navigate
+from config import CONFIG
 
 log = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ def check_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional[int])
     Navigate to the appointment page and return (earliest_date, detected_mode).
     detected_mode is 'unpaid' if redirected to /payment, 'paid' otherwise.
     """
-    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
+    navigate(driver, f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
 
     if "payment" in driver.current_url:
         log.info("[AUTO] Redirected to payment page — fee not paid yet")
@@ -84,7 +85,7 @@ def _fetch_paid_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional
         return None
 
     api_url = (
-        f"{BASE_URL}/niv/schedule/{schedule_id}/appointment/"
+        f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment/"
         f"days/{facility_id}.json?appointments[expedite]=false"
     )
 
@@ -121,17 +122,18 @@ def _fetch_paid_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional
         log.warning("[PAID] Non-JSON response: %s", result[:200])
         return None
 
-    if not isinstance(data, list) or len(data) == 0:
+    if not isinstance(data, list) or not data:
         log.info("[PAID] No available dates in API response.")
         return None
 
     available = []
     for entry in data:
-        if entry.get("business_day"):
-            try:
-                available.append(datetime.strptime(entry["date"], "%Y-%m-%d").date())
-            except (ValueError, TypeError):
-                continue
+        if not entry.get("business_day"):
+            continue
+        try:
+            available.append(datetime.strptime(entry["date"], "%Y-%m-%d").date())
+        except (ValueError, TypeError):
+            continue
 
     if not available:
         log.info("[PAID] No business-day slots available.")

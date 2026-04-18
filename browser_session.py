@@ -1,23 +1,12 @@
 import logging
-import os
 import time
 
-from dotenv import load_dotenv
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-load_dotenv()
-
-BASE_URL = "https://ais.usvisa-info.com/en-et"
-LOGIN_URL = f"{BASE_URL}/niv/users/sign_in"
-
-AIS_EMAIL = os.getenv("AIS_EMAIL", "")
-AIS_PASSWORD = os.getenv("AIS_PASSWORD", "")
-SCHEDULE_ID = int(os.getenv("SCHEDULE_ID", "0"))
-FACILITY_ID = int(os.getenv("FACILITY_ID", "0"))
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
+from config import CONFIG
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +40,7 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
     Selenium handles cookies and CSRF automatically via the real browser session.
     """
     log.info("Navigating to login page...")
-    driver.get(LOGIN_URL)
+    driver.get(CONFIG.login_url)
     time.sleep(3)
 
     try:
@@ -60,22 +49,27 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
         wait = WebDriverWait(driver, 20)
 
         log.info("Waiting for email field...")
-        email_field = wait.until(EC.presence_of_element_located((By.ID, "user_email")))
-        log.info("Found email field")
-        email_field.clear()
-        email_field.send_keys(email)
-
-        log.info("Filling password...")
-        pw_field = driver.find_element(By.ID, "user_password")
-        pw_field.clear()
-        pw_field.send_keys(password)
+        for field_id, value, found_msg in (
+            ("user_email", email, "Found email field"),
+            ("user_password", password, "Filling password..."),
+        ):
+            field = (
+                wait.until(EC.presence_of_element_located((By.ID, field_id)))
+                if field_id == "user_email"
+                else driver.find_element(By.ID, field_id)
+            )
+            if found_msg:
+                log.info(found_msg)
+            field.clear()
+            field.send_keys(value)
 
         log.info("Finding privacy policy checkbox...")
         try:
             checkbox = driver.find_element(By.ID, "policy_confirmed")
-            log.info("Checkbox found. Currently selected: %s", checkbox.is_selected())
+            selected = checkbox.is_selected()
+            log.info("Checkbox found. Currently selected: %s", selected)
 
-            if not checkbox.is_selected():
+            if not selected:
                 try:
                     checkbox.click()
                     log.info("Clicked checkbox with Selenium")
@@ -106,7 +100,7 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
             pass
 
         log.info("Waiting for redirect...")
-        wait.until(EC.url_changes(LOGIN_URL))
+        wait.until(EC.url_changes(CONFIG.login_url))
         time.sleep(2)
 
         current = driver.current_url
