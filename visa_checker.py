@@ -31,7 +31,7 @@ load_dotenv()
 # ─────────────────────────────────────────────────────────────────
 
 BASE_URL    = "https://ais.usvisa-info.com/en-et"
-LOGIN_URL   = f"{BASE_URL}/users/sign_in"
+LOGIN_URL   = f"{BASE_URL}/niv/users/sign_in"
 NIV_HOME    = f"{BASE_URL}/niv"
 
 # Your AIS account
