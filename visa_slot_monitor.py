@@ -32,7 +32,6 @@ load_dotenv()
 
 BASE_URL    = "https://ais.usvisa-info.com/en-et"
 LOGIN_URL   = f"{BASE_URL}/niv/users/sign_in"
-NIV_HOME    = f"{BASE_URL}/niv"
 
 # Your AIS account
 AIS_EMAIL    = os.getenv("AIS_EMAIL", "")
@@ -175,7 +174,12 @@ def alert_if_changed(new_val: Optional[date], last_val: Optional[date], mode: st
             f"🚨 VISA APPOINTMENT — Ethiopia\n"
             f"{direction}"
             f"{format_date(new_val, current_date)}\n\n"
-            f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/{'payment' if mode == 'unpaid' else 'appointment'}"
+            + (
+                f"💳 Pay fee → {BASE_URL}/niv/schedule/{schedule_id}/payment\n"
+                f"📅 Book appt → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
+                if mode == "unpaid" else
+                f"📅 Book now → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
+            )
         )
 
     save_earliest(mode, new_val)
@@ -309,19 +313,35 @@ def get_csrf_token(driver: uc.Chrome) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# MODE 1 — UNPAID
-# The /payment page shows the earliest available appointment date
-# to users who haven't paid yet.
+# SLOT CHECK
+# Navigates to the appointment page and auto-detects which state
+# the account is in based on where the site redirects:
+#
+#   → /payment     fee not paid yet — scrape the earliest date shown on page
+#   → /appointment fee paid         — call the JSON calendar API
 # ─────────────────────────────────────────────────────────────────
 
-def check_unpaid(driver: uc.Chrome, schedule_id: int) -> Optional[date]:
+def check_slots(driver: uc.Chrome, schedule_id: int,
+                facility_id: Optional[int]) -> tuple[Optional[date], str]:
     """
-    Navigates to the payment page (e.g. /en-et/niv/schedule/73783417/payment)
-    which shows the earliest available appointment date to unpaid users.
-    Returns a date object if found, else None.
+    Navigates to the appointment page and returns (earliest_date, detected_mode).
+    detected_mode is 'unpaid' if redirected to /payment, 'paid' otherwise.
     """
-    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/payment")
+    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
 
+    if "payment" in driver.current_url:
+        log.info("[AUTO] Redirected to payment page — fee not paid yet")
+        return _scrape_earliest_from_page(driver), "unpaid"
+
+    log.info("[AUTO] On appointment page — fee paid")
+    return _fetch_paid_slots(driver, schedule_id, facility_id), "paid"
+
+
+def _scrape_earliest_from_page(driver: uc.Chrome) -> Optional[date]:
+    """
+    Scrapes the earliest available appointment date from the current page source.
+    Used when the account has not paid the fee yet.
+    """
     page = driver.page_source
 
     # AIS shows the date in the "First Available Appointments" table like:
@@ -371,12 +391,10 @@ def parse_date_flexible(raw: str) -> Optional[date]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# MODE 2 — PAID
-# Uses the Selenium session's cookies to call the JSON API that the
-# AIS calendar uses. Returns all available dates.
+# PAID — JSON CALENDAR API
 # ─────────────────────────────────────────────────────────────────
 
-def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optional[list[date]]:
+def _fetch_paid_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional[int]) -> Optional[list[date]]:
     """
     Calls the AIS appointment days API using the browser's authenticated session.
     We inject a fetch() call into the page via JavaScript so the browser sends
@@ -387,8 +405,7 @@ def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optiona
         f"days/{facility_id}.json?appointments[expedite]=false"
     )
 
-    # Navigate to the appointment page first so Referer header is correct
-    navigate(driver, f"{BASE_URL}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
+    # The appointment page was already loaded by check_slots; Referer is correct
     log.debug(f"[PAID] Calling API: {api_url}")
 
     # Execute fetch() in the browser context — it carries all session cookies
@@ -452,7 +469,6 @@ def check_paid(driver: uc.Chrome, schedule_id: int, facility_id: int) -> Optiona
 
 def main():
     parser = argparse.ArgumentParser(description="US Visa Slot Checker — Ethiopia")
-    parser.add_argument("--mode", choices=["unpaid", "paid"], required=True)
     parser.add_argument("--current-date", required=False, default=None,
                         help="Your current appointment date YYYY-MM-DD (only for paid mode — "
                              "alerts when an earlier slot is found)")
@@ -495,7 +511,6 @@ def main():
 
     log.info("=" * 60)
     log.info("  US Visa Slot Checker — Ethiopia (AIS)")
-    log.info(f"  Mode          : {args.mode.upper()}")
     if current_date:
         log.info(f"  Current appt  : {current_date}")
         log.info(f"  Alert if      : earlier than {current_date}")
@@ -515,17 +530,13 @@ def main():
     # --- RESOLVE SCHEDULE ID: flag → env → error ---
     schedule_id = resolve_id(args.schedule_id, SCHEDULE_ID, "Schedule ID", driver=driver)
 
-    # --- RESOLVE FACILITY ID: flag → env → error (paid mode only) ---
-    facility_id = resolve_id(args.facility_id, FACILITY_ID, "Facility ID",
-                             required=(args.mode == "paid"), driver=driver)
+    # facility_id is optional upfront — only required if the account has paid (detected at runtime)
+    facility_id = args.facility_id or FACILITY_ID or None
 
     # In-memory dedupe, seeded from disk so restarts don't re-alert the same date
-    last_unpaid_alerted: Optional[date] = load_earliest("unpaid")
-    last_paid_alerted: Optional[date] = load_earliest("paid")
-    if last_unpaid_alerted:
-        log.info(f"Restored persisted unpaid earliest: {last_unpaid_alerted}")
-    if last_paid_alerted:
-        log.info(f"Restored persisted paid earliest: {last_paid_alerted}")
+    last_alerted: Optional[date] = load_earliest("slot")
+    if last_alerted:
+        log.info(f"Restored persisted earliest: {last_alerted}")
 
     # --- MAIN LOOP ---
     while True:
@@ -538,36 +549,24 @@ def main():
                     time.sleep(60)
                     continue
 
-            if args.mode == "unpaid":
-                earliest_date = check_unpaid(driver, schedule_id)
-                last_unpaid_alerted = alert_if_changed(
-                    earliest_date,
-                    last_unpaid_alerted,
-                    "unpaid",
-                    schedule_id,
-                )
+            earliest_date, detected_mode = check_slots(driver, schedule_id, facility_id)
 
-            else:
-                available = check_paid(driver, schedule_id, facility_id)
+            if detected_mode == "paid" and earliest_date and current_date:
+                slots = [d for d in [earliest_date] if d < current_date]
+                if not slots:
+                    log.info(f"No slots earlier than {current_date}. Earliest overall: {earliest_date}")
+                    earliest_date = None
 
-                earliest_date = None
-                if available:
-                    slots = [d for d in available if d < current_date] if current_date else available
-                    if current_date and not slots:
-                        log.info(f"No slots earlier than {current_date}. Earliest overall: {available[0]}")
-                    else:
-                        earliest_date = slots[0]
+            last_alerted = alert_if_changed(
+                earliest_date,
+                last_alerted,
+                detected_mode,
+                schedule_id,
+                current_date,
+            )
 
-                last_paid_alerted = alert_if_changed(
-                    earliest_date,
-                    last_paid_alerted,
-                    "paid",
-                    schedule_id,
-                    current_date,
-                )
-
-                if not available:
-                    log.debug("No available slots this cycle.")
+            if detected_mode == "paid" and not earliest_date:
+                log.debug("No available slots this cycle.")
 
         except KeyboardInterrupt:
             log.info("Stopped by user.")
