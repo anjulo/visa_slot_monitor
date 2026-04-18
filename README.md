@@ -29,24 +29,27 @@ Environment variables are described inline in [`.env.example`](.env.example). Co
 
 ```bash
 # Unpaid mode
-python3 visa_checker.py --mode unpaid
+python3 visa_checker.py --mode unpaid --schedule-id 73783417
 
 # Paid mode — alerts when the earliest open slot changes
-python3 visa_checker.py --mode paid
+python3 visa_checker.py --mode paid --schedule-id 73783417 --facility-id 95
 
 # Paid mode — only alert if a slot is earlier than your current appointment
-python3 visa_checker.py --mode paid --current-date 2026-12-31
+python3 visa_checker.py --mode paid --schedule-id 73783417 --facility-id 95 --current-date 2026-12-31
 ```
+
+Alternatively, set `SCHEDULE_ID` and `FACILITY_ID` in `.env` and omit the flags.
 
 ## All flags
 
 | Flag | Description |
 |---|---|
 | `--mode` | `unpaid` or `paid` — required |
+| `--schedule-id` | Schedule ID (priority: flag → `SCHEDULE_ID` env). Required. |
 | `--current-date` | `YYYY-MM-DD`. Paid mode only. If set, alerts only for slots earlier than this date. |
-| `--schedule-id` | Override Schedule ID. Useful when account has multiple groups. |
-| `--facility-id` | Override Facility ID (paid mode). |
+| `--facility-id` | Facility ID (paid mode). Required for paid mode. |
 | `--interval` | Seconds between checks. |
+| `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`). |
 | `--no-headless` | Show the browser window. Useful if login keeps failing. |
 
 ---
@@ -56,5 +59,3 @@ python3 visa_checker.py --mode paid --current-date 2026-12-31
 **Login fails** — Run with `--no-headless` to watch the browser.
 
 **Date not found (unpaid mode)** — The script saves the page to `unpaid_debug.html`. Open it to see what the page actually shows and update the regex in `check_unpaid()`.
-
-**Wrong group picked** — Pass `--schedule-id` explicitly.
