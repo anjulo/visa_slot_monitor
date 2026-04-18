@@ -1,14 +1,14 @@
 # US Visa Appointment Slot Checker — Ethiopia
 
-Monitors [ais.usvisa-info.com/en-et](https://ais.usvisa-info.com/en-et) and sends an SMS when appointment slots are available.
+Monitors [ais.usvisa-info.com/en-et](https://ais.usvisa-info.com/en-et) and sends a Telegram message when appointment slots are available.
 
 ---
 
 ## Modes
 
-**`unpaid`** — Fee not paid yet. Watches the earliest available date shown on your payment page and texts you whenever it changes.
+**`unpaid`** — Fee not paid yet. Watches the earliest available date shown on your payment page and sends you a Telegram message whenever it changes.
 
-**`paid`** — Fee paid. Calls the AIS calendar API and texts you when the earliest open slot changes (SMS includes that single earliest date).
+**`paid`** — Fee paid. Calls the AIS calendar API and sends you a Telegram message when the earliest open slot changes (message includes that single earliest date).
 
 If you have a current appointment and only want to be alerted for earlier slots, pass `--current-date`.
 

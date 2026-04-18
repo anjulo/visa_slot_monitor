@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 US Visa Appointment Slot Checker — Ethiopia (AIS)
-Monitors ais.usvisa-info.com and sends an SMS when an earlier slot appears.
+Monitors ais.usvisa-info.com and sends a Telegram message when an earlier slot appears.
 
 See README.md for full setup and usage instructions.
 """
@@ -16,12 +16,12 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
+import requests
 import undetected_chromedriver as uc
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from twilio.rest import Client
 
 # Load environment variables from .env file
 load_dotenv()
@@ -48,11 +48,9 @@ SCHEDULE_ID = int(os.getenv("SCHEDULE_ID", "0"))
 #   right-click the consulate dropdown → Inspect → <option value="???">Addis Ababa</option>
 FACILITY_ID = int(os.getenv("FACILITY_ID", "0"))
 
-# Twilio — https://console.twilio.com
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM        = os.getenv("TWILIO_FROM_NUMBER", "")
-TWILIO_TO          = os.getenv("TWILIO_TO_NUMBER", "")
+# Telegram — https://t.me/BotFather
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Seconds between checks (don't go below 120 — site will block you)
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
@@ -65,16 +63,17 @@ log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────
-# SMS
+# TELEGRAM
 # ─────────────────────────────────────────────────────────────────
 
-def send_sms(body: str) -> None:
+def send_telegram(body: str) -> None:
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        msg = client.messages.create(body=body, from_=TWILIO_FROM, to=TWILIO_TO)
-        log.info(f"SMS sent — SID: {msg.sid}")
+        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": body}, timeout=10)
+        resp.raise_for_status()
+        log.info(f"Telegram message sent — message_id: {resp.json()['result']['message_id']}")
     except Exception as e:
-        log.error(f"SMS failed: {e}")
+        log.error(f"Telegram send failed: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -385,7 +384,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("visa_checker.log", mode="w"),
+            logging.FileHandler("visa_slot_monitor.log", mode="w"),
         ],
     )
 
@@ -398,6 +397,11 @@ def main():
             log.error("Invalid --current-date. Use YYYY-MM-DD format.")
             sys.exit(1)
 
+    # Validate Telegram credentials early
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env")
+        sys.exit(1)
+
     log.info("=" * 60)
     log.info("  US Visa Slot Checker — Ethiopia (AIS)")
     log.info(f"  Mode          : {args.mode.upper()}")
@@ -405,7 +409,7 @@ def main():
         log.info(f"  Current appt  : {current_date}")
         log.info(f"  Alert if      : earlier than {current_date}")
     log.info(f"  Check every   : {args.interval}s")
-    log.info(f"  SMS to        : {TWILIO_TO}")
+    log.info(f"  Telegram chat : {TELEGRAM_CHAT_ID}")
     log.info("=" * 60)
 
     headless = not args.no_headless
@@ -442,7 +446,7 @@ def main():
             sys.exit(1)
         log.debug(f"Using facility ID: {facility_id}")
 
-    # In-memory dedupe only (avoid repeat SMS each cycle for the same earliest date)
+    # In-memory dedupe only (avoid repeat messages each cycle for the same earliest date)
     last_unpaid_alerted: Optional[date] = None
     last_paid_earliest_alerted: Optional[date] = None
 
@@ -470,7 +474,7 @@ def main():
                             f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/payment"
                         )
                         log.info(f"NEW DATE! {readable_date}")
-                        send_sms(message)
+                        send_telegram(message)
                         last_unpaid_alerted = earliest_date
                     else:
                         log.debug(f"Date unchanged: {earliest_date}")
@@ -505,7 +509,7 @@ def main():
                             f"Book now → {BASE_URL}/niv/schedule/{schedule_id}/appointment"
                         )
                         log.info(f"ALERT! Earliest qualifying slot: {readable_date}")
-                        send_sms(message)
+                        send_telegram(message)
                         last_paid_earliest_alerted = earliest_date
                     else:
                         log.debug(f"Earliest unchanged: {earliest_date}")
@@ -518,7 +522,7 @@ def main():
         except Exception as e:
             log.error(f"Unexpected error: {e}")
 
-        log.debug(f"Sleeping {args.interval}s...\\n")
+        log.debug(f"Sleeping {args.interval}s...\n")
         time.sleep(args.interval)
 
     driver.quit()
