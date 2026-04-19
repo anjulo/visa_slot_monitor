@@ -1,6 +1,7 @@
 import logging
 import time
 
+# undetected_chromedriver patches Chrome to bypass AIS bot-detection fingerprinting
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -18,10 +19,7 @@ def navigate(driver: uc.Chrome, url: str, wait_seconds: int = 3) -> None:
 
 
 def make_driver(headless: bool = True) -> uc.Chrome:
-    """
-    Create an undetected Chrome driver.
-    headless=False is useful for debugging login issues.
-    """
+    """Create an undetected Chrome driver. headless=False is useful for debugging login."""
     options = uc.ChromeOptions()
     if headless:
         options.add_argument("--headless")
@@ -31,6 +29,7 @@ def make_driver(headless: bool = True) -> uc.Chrome:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
+    # use_subprocess prevents Chrome from inheriting Python's signal handlers (avoids zombie on Ctrl+C)
     return uc.Chrome(options=options, use_subprocess=True)
 
 
@@ -50,19 +49,15 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
         wait = WebDriverWait(driver, 20)
 
         log.info("Waiting for email field...")
-        for field_id, value, found_msg in (
-            ("user_email", email, "Found email field"),
-            ("user_password", password, "Filling password..."),
-        ):
-            field = (
-                wait.until(EC.presence_of_element_located((By.ID, field_id)))
-                if field_id == "user_email"
-                else driver.find_element(By.ID, field_id)
-            )
-            if found_msg:
-                log.info(found_msg)
-            field.clear()
-            field.send_keys(value)
+        email_field = wait.until(EC.presence_of_element_located((By.ID, "user_email")))
+        log.info("Found email field")
+        email_field.clear()
+        email_field.send_keys(email)
+
+        password_field = driver.find_element(By.ID, "user_password")
+        log.info("Filling password...")
+        password_field.clear()
+        password_field.send_keys(password)
 
         log.info("Finding privacy policy checkbox...")
         try:
@@ -75,12 +70,14 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
                     checkbox.click()
                     log.info("Clicked checkbox with Selenium")
                 except Exception:
+                    # AIS JS sometimes intercepts the DOM click event
                     log.info("Checkbox click via Selenium failed, trying JavaScript...")
                     driver.execute_script("arguments[0].click();", checkbox)
                     log.info("Clicked checkbox with JavaScript")
 
             time.sleep(0.5)
             if not checkbox.is_selected():
+                # Last resort: bypass event listeners entirely
                 log.warning("Checkbox still not selected after click. Trying again...")
                 driver.execute_script("arguments[0].checked = true;", checkbox)
                 log.info("Set checkbox to checked via JavaScript")

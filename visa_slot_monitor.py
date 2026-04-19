@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.11
 """
 US Visa Appointment Slot Checker — Ethiopia (AIS)
-Monitors ais.usvisa-info.com and posts to a Telegram channel when an earlier slot appears.
+Monitors ais.usvisa-info.com and posts to a Telegram channel when slots change.
 
 See README.md for full setup and usage instructions.
 """
@@ -13,10 +13,11 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import alert_if_changed
+from alerts_and_state import Slots, alert_if_changed
 from browser_session import login, make_driver
 from config import CONFIG
 from slot_checker import check_slots
+
 log = logging.getLogger(__name__)
 
 
@@ -33,7 +34,7 @@ def main() -> None:
         "--current-date",
         required=False,
         default=None,
-        help="Your current appointment date YYYY-MM-DD (only for paid mode — alerts when an earlier slot is found)",
+        help="Your current appointment date YYYY-MM-DD — only alerts when an earlier slot is found",
     )
     parser.add_argument(
         "--interval",
@@ -54,6 +55,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # mode="w" — each run's log is self-contained; no rotation needed
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -68,7 +70,8 @@ def main() -> None:
         try:
             current_date = datetime.strptime(args.current_date, "%Y-%m-%d").date()
         except ValueError:
-            _die("Invalid --current-date. Use YYYY-MM-DD format.")
+            log.error("Invalid --current-date. Use YYYY-MM-DD format.")
+            sys.exit(1)
 
     log.info("=" * 60)
     log.info("  US Visa Slot Checker — Ethiopia (AIS)")
@@ -77,43 +80,41 @@ def main() -> None:
         log.info("  Alert if      : earlier than %s", current_date)
     log.info("  Check every   : %ss", args.interval)
     log.info("  Telegram channel: %s", CONFIG.telegram_channel_id)
+    if CONFIG.night_ping_targets:
+        log.info("  Night pings   : %s", ", ".join(CONFIG.night_ping_targets))
     log.info("=" * 60)
 
     driver = make_driver(headless=not args.no_headless)
-
     facility_id = CONFIG.facility_id or None
-
-    last_alerted: Optional[date] = None
-
+    last_alerted: Optional[Slots] = None
     first_run = True
+
     while True:
         try:
+            # AIS silently redirects to the login page on session expiry — no error page
             if first_run or "sign_in" in driver.current_url:
-                log.info("logging in...") if first_run else log.warning("Session expired. Re-logging in...")
+                if first_run:
+                    log.info("Logging in...")
+                else:
+                    log.warning("Session expired. Re-logging in...")
                 first_run = False
                 if not login(driver, CONFIG.ais_email, CONFIG.ais_password):
-                    log.error("login failed. Retrying in 60s.")
+                    log.error("Login failed. Retrying in 60s.")
                     time.sleep(60)
                     continue
 
-            earliest_date, detected_mode = check_slots(driver, CONFIG.schedule_id, facility_id)
-            if detected_mode == "paid" and not facility_id:
-                _die("FACILITY_ID is required in .env", driver)
+            slots, fee_paid = check_slots(driver, CONFIG.schedule_id, facility_id)
 
-            if detected_mode == "paid" and earliest_date and current_date and earliest_date >= current_date:
-                log.info("No slots earlier than %s. Earliest overall: %s", current_date, earliest_date)
-                earliest_date = None
+            if fee_paid and not facility_id:
+                _die("FACILITY_ID is required in .env when MRV fee is already paid", driver)
 
-            last_alerted = alert_if_changed(
-                earliest_date,
-                last_alerted,
-                detected_mode,
-                CONFIG.schedule_id,
-                current_date,
-            )
+            if current_date:
+                slots = [(d, n) for d, n in slots if d < current_date]
+                if not slots:
+                    log.info("No slots earlier than %s this cycle.", current_date)
 
-            if detected_mode == "paid" and not earliest_date:
-                log.debug("No available slots this cycle.")
+            last_alerted = alert_if_changed(slots, last_alerted, fee_paid, CONFIG.schedule_id, current_date)
+
         except KeyboardInterrupt:
             log.info("Stopped by user.")
             break
