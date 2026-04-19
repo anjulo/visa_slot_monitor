@@ -12,7 +12,9 @@ log = logging.getLogger(__name__)
 def send_telegram(body: str) -> None:
     url = f"https://api.telegram.org/bot{CONFIG.telegram_bot_token}/sendMessage"
     try:
-        response = requests.post(url, json={"chat_id": CONFIG.telegram_chat_id, "text": body}, timeout=10)
+        response = requests.post(
+            url, json={"chat_id": CONFIG.telegram_channel_id, "text": body}, timeout=10
+        )
         response.raise_for_status()
         log.info("Telegram message sent — message_id: %s", response.json()["result"]["message_id"])
     except Exception as exc:

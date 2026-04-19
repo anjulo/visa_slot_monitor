@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.11
 """
 US Visa Appointment Slot Checker — Ethiopia (AIS)
-Monitors ais.usvisa-info.com and sends a Telegram message when an earlier slot appears.
+Monitors ais.usvisa-info.com and posts to a Telegram channel when an earlier slot appears.
 
 See README.md for full setup and usage instructions.
 """
@@ -17,7 +17,6 @@ from alerts_and_state import alert_if_changed
 from browser_session import login, make_driver
 from config import CONFIG
 from slot_checker import check_slots
-
 log = logging.getLogger(__name__)
 
 
@@ -77,26 +76,23 @@ def main() -> None:
         log.info("  Current appt  : %s", current_date)
         log.info("  Alert if      : earlier than %s", current_date)
     log.info("  Check every   : %ss", args.interval)
-    log.info("  Telegram chat : %s", CONFIG.telegram_chat_id)
+    log.info("  Telegram channel: %s", CONFIG.telegram_channel_id)
     log.info("=" * 60)
 
     driver = make_driver(headless=not args.no_headless)
-
-    log.info("Logging in...")
-    if not login(driver, CONFIG.ais_email, CONFIG.ais_password):
-        driver.quit()
-        sys.exit(1)
 
     facility_id = CONFIG.facility_id or None
 
     last_alerted: Optional[date] = None
 
+    first_run = True
     while True:
         try:
-            if "sign_in" in driver.current_url:
-                log.warning("Session expired. Re-logging in...")
+            if first_run or "sign_in" in driver.current_url:
+                log.info("logging in...") if first_run else log.warning("Session expired. Re-logging in...")
+                first_run = False
                 if not login(driver, CONFIG.ais_email, CONFIG.ais_password):
-                    log.error("Re-login failed. Retrying in 60s.")
+                    log.error("login failed. Retrying in 60s.")
                     time.sleep(60)
                     continue
 

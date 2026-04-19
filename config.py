@@ -11,14 +11,13 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class AppConfig:
     base_url: str
-    login_url: str
     ais_email: str
     ais_password: str
     schedule_id: int
     facility_id: int
     check_interval: int
     telegram_bot_token: str
-    telegram_chat_id: str
+    telegram_channel_id: str
 
 
 def _die(message: str) -> None:
@@ -40,18 +39,23 @@ def _build_config() -> AppConfig:
 
     cfg = AppConfig(
         base_url=base_url,
-        login_url=f"{base_url}/niv/users/sign_in",
         ais_email=os.getenv("AIS_EMAIL", ""),
         ais_password=os.getenv("AIS_PASSWORD", ""),
         schedule_id=_read_int("SCHEDULE_ID", "0"),
         facility_id=_read_int("FACILITY_ID", "0"),
         check_interval=_read_int("CHECK_INTERVAL", "300"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        telegram_channel_id=(
+            os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
+            or os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        ),
     )
 
-    if not cfg.telegram_bot_token or not cfg.telegram_chat_id:
-        _die("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env")
+    if not cfg.telegram_bot_token or not cfg.telegram_channel_id:
+        _die(
+            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID must be set in .env "
+            "(TELEGRAM_CHAT_ID is still accepted for compatibility)"
+        )
     if not cfg.schedule_id:
         _die("SCHEDULE_ID must be set in .env")
     return cfg

@@ -31,7 +31,7 @@ def make_driver(headless: bool = True) -> uc.Chrome:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
-    return uc.Chrome(options=options)
+    return uc.Chrome(options=options, use_subprocess=True)
 
 
 def login(driver: uc.Chrome, email: str, password: str) -> bool:
@@ -40,7 +40,8 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
     Selenium handles cookies and CSRF automatically via the real browser session.
     """
     log.info("Navigating to login page...")
-    driver.get(CONFIG.login_url)
+    login_url = f"{CONFIG.base_url}/niv/users/sign_in"
+    driver.get(login_url)
     time.sleep(3)
 
     try:
@@ -100,7 +101,7 @@ def login(driver: uc.Chrome, email: str, password: str) -> bool:
             pass
 
         log.info("Waiting for redirect...")
-        wait.until(EC.url_changes(CONFIG.login_url))
+        wait.until(EC.url_changes(login_url))
         time.sleep(2)
 
         current = driver.current_url
