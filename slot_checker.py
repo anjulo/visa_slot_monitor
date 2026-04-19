@@ -54,11 +54,11 @@ def check_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional[int])
     navigate(driver, f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
 
     if "payment" in driver.current_url:
-        log.info("MRV Fee not paid — reading earliest date from page")
+        log.debug("MRV Fee not paid — reading earliest date from page")
         d = _scrape_earliest_from_page(driver)
         return ([(d, 0)] if d else []), False
 
-    log.info("Fee paid — fetching available dates via API")
+    log.debug("MRV Fee already paid — fetching available dates via API")
     return _fetch_available_dates(driver, schedule_id, facility_id), True
 
 
@@ -99,7 +99,7 @@ def _fetch_available_dates(driver: uc.Chrome, schedule_id: int, facility_id: int
 
     data = _api_get(driver, days_url)
     if not isinstance(data, list) or not data:
-        log.info("No available dates returned by API.")
+        log.debug("No available dates returned by API.")
         return []
 
     available = []
@@ -110,12 +110,12 @@ def _fetch_available_dates(driver: uc.Chrome, schedule_id: int, facility_id: int
             continue
 
     if not available:
-        log.info("No slots available.")
+        log.debug("No slots available.")
         return []
 
     available.sort()
     top = available[:5]
-    log.info("Found %d available date(s), showing earliest 5: %s", len(available), top)
+    log.debug("Found %d available date(s), showing earliest 5: %s", len(available), top)
 
     return [(d, _count_times(driver, schedule_id, facility_id, d)) for d in top]
 
@@ -130,5 +130,5 @@ def _count_times(driver: uc.Chrome, schedule_id: int, facility_id: int, d: date)
     if not isinstance(data, dict):
         return 0
     count = len(data.get("available_times", []))
-    log.info("Times for %s: %d available", d, count)
+    log.debug("Times for %s: %d available", d, count)
     return count
