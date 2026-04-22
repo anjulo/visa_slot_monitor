@@ -11,7 +11,8 @@ Polls `ais.usvisa-info.com/en-et` for US visa appointment availability in Ethiop
 | `visa_slot_monitor.py` | Entry point. Login loop, session-expiry detection, orchestration. |
 | `browser_session.py` | `make_driver()`, `login()`, `navigate()`. All Selenium/Chrome logic lives here. |
 | `slot_checker.py` | `check_slots()` — detects fee-paid state, calls the right scrape/API path. |
-| `alerts_and_state.py` | `alert_if_changed()` — change detection, Telegram formatting, night pings. |
+| `alerts.py` | `alert_if_changed()` — change detection, Telegram formatting, night pings. |
+| `telegram_bot.py` | `send_telegram()`, `/status` command listener, shared bot state. |
 | `config.py` | Loads `.env`, validates required fields, exposes a frozen `CONFIG` singleton. |
 
 ## Two modes — fee paid vs. not paid

@@ -53,6 +53,7 @@ def _format_slots(
     slots: Slots,
     last_slots: Optional[Slots] = None,
     dates_changed: bool = False,
+    current_date: Optional[date] = None,
 ) -> str:
     last_counts = {d: n for d, n in last_slots} if last_slots else {}
     lines = []
@@ -61,6 +62,8 @@ def _format_slots(
         if count and not dates_changed and d in last_counts and count < last_counts[d]:
             slot_str += f" (was {last_counts[d]})"
         lines.append(f"{i}. {d.strftime('%A, %B %d')} · {slot_str}")
+    if current_date:
+        lines.append(f"{len(slots) + 1}. {current_date.strftime('%A, %B %d')} · ← your appt")
     return "\n".join(lines)
 
 
@@ -93,7 +96,7 @@ def _build_alert(
         footer_lines.append(f"💳 Pay → {CONFIG.base_url}/niv/schedule/{schedule_id}/payment")
     footer_lines.append(f"📅 Book → {appointment_url}")
 
-    slot_block = _format_slots(new_slots, last_slots, dates_changed)
+    slot_block = _format_slots(new_slots, last_slots, dates_changed, current_date)
 
     return "\n".join([
         "🚨 US Visa Slot — Ethiopia",

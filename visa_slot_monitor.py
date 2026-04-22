@@ -13,7 +13,7 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import Slots, alert_if_changed
+from alerts import Slots, alert_if_changed
 from telegram_bot import set_start_time, start_command_listener, update_bot_state
 from browser_session import login, make_driver, restart_driver
 from config import CONFIG
