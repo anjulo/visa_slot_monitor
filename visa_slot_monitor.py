@@ -13,7 +13,8 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import Slots, alert_if_changed, send_heartbeat
+from alerts_and_state import Slots, alert_if_changed
+from telegram_bot import set_start_time, start_command_listener, update_bot_state
 from browser_session import login, make_driver, restart_driver
 from config import CONFIG
 from slot_checker import check_slots
@@ -84,10 +85,13 @@ def main() -> None:
         log.info("  Night pings   : %s", ", ".join(CONFIG.night_ping_targets))
     log.info("=" * 60)
 
+    set_start_time()
+    cmd_thread = start_command_listener()
+    log.info("Telegram command listener started (thread: %s)", cmd_thread.name)
+
     driver = make_driver(headless=not args.no_headless)
     facility_id = CONFIG.facility_id or None
     last_alerted: Optional[Slots] = None
-    last_heartbeat: float = 0.0
     first_run = True
 
     while True:
@@ -119,6 +123,7 @@ def main() -> None:
                 _die("FACILITY_ID is required in .env when MRV fee is already paid", driver)
 
             last_alerted = alert_if_changed(slots, last_alerted, fee_paid, CONFIG.schedule_id, current_date)
+            update_bot_state(datetime.now(), fee_paid, slots)
 
         except KeyboardInterrupt:
             log.info("Stopped by user.")
@@ -130,10 +135,6 @@ def main() -> None:
                 driver = restart_driver(driver, headless=not args.no_headless)
                 first_run = True
             continue
-
-        if time.time() - last_heartbeat >= 7200:  # 2 hours
-            send_heartbeat(args.interval)
-            last_heartbeat = time.time()
 
         log.info("Sleeping %ss...\n", args.interval)
         time.sleep(args.interval)

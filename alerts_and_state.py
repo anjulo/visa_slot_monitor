@@ -2,36 +2,14 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-import requests
-
 from config import CONFIG
+from telegram_bot import send_telegram
 
 log = logging.getLogger(__name__)
 
 Slots = list[tuple[date, int]]  # (date, available_time_count)
 
-_SEP = "─" * 19
-
-
-def send_telegram(body: str, chat_id: str = None) -> None:
-    """Send a Telegram message to chat_id (defaults to the configured channel)."""
-    url = f"https://api.telegram.org/bot{CONFIG.telegram_bot_token}/sendMessage"
-    target = chat_id or CONFIG.telegram_channel_id
-    try:
-        response = requests.post(
-            url, json={"chat_id": target, "text": body}, timeout=10
-        )
-        response.raise_for_status()
-        log.info("Telegram sent to %s — message_id: %s", target, response.json()["result"]["message_id"])
-    except Exception as exc:
-        log.error("Telegram send failed to %s: %s", target, exc)
-
-
-def send_heartbeat(check_interval: int) -> None:
-    now = datetime.now().strftime("%-I:%M %p EST")
-    body = f"✅ Visa Slot Monitor running — last check at {now}, every {check_interval // 60} minutes"
-    log.info("Sending heartbeat to channel")
-    send_telegram(body)
+_SEP = "─" * 18
 
 
 def _is_nighttime() -> bool:
