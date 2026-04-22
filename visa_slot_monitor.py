@@ -13,8 +13,8 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-from alerts_and_state import Slots, alert_if_changed
-from browser_session import login, make_driver
+from alerts_and_state import Slots, alert_if_changed, send_heartbeat
+from browser_session import login, make_driver, restart_driver
 from config import CONFIG
 from slot_checker import check_slots
 
@@ -60,8 +60,8 @@ def main() -> None:
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler("visa_slot_monitor.log", mode="w"),
+            # logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f"visa_slot_monitor_{datetime.now().strftime('%Y%m%d%H%M%S')}.log", mode="w"),
         ],
     )
 
@@ -87,12 +87,22 @@ def main() -> None:
     driver = make_driver(headless=not args.no_headless)
     facility_id = CONFIG.facility_id or None
     last_alerted: Optional[Slots] = None
+    last_heartbeat: float = 0.0
     first_run = True
 
     while True:
         try:
+            # Probe current_url first — raises if Chrome has crashed (invalid session / no such window)
+            try:
+                current_url = driver.current_url
+            except Exception:
+                log.warning("Chrome session died — restarting browser...")
+                driver = restart_driver(driver, headless=not args.no_headless)
+                first_run = True
+                current_url = ""
+
             # AIS silently redirects to the login page on session expiry — no error page
-            if first_run or "sign_in" in driver.current_url:
+            if first_run or "sign_in" in current_url:
                 if first_run:
                     log.info("Logging in...")
                 else:
@@ -108,11 +118,6 @@ def main() -> None:
             if fee_paid and not facility_id:
                 _die("FACILITY_ID is required in .env when MRV fee is already paid", driver)
 
-            if current_date:
-                slots = [(d, n) for d, n in slots if d < current_date]
-                if not slots:
-                    log.info("No slots earlier than %s this cycle.", current_date)
-
             last_alerted = alert_if_changed(slots, last_alerted, fee_paid, CONFIG.schedule_id, current_date)
 
         except KeyboardInterrupt:
@@ -120,6 +125,15 @@ def main() -> None:
             break
         except Exception as exc:
             log.error("Unexpected error: %s", exc)
+            if "no such window" in str(exc).lower() or "invalid session" in str(exc).lower():
+                log.warning("Browser window lost — restarting Chrome...")
+                driver = restart_driver(driver, headless=not args.no_headless)
+                first_run = True
+            continue
+
+        if time.time() - last_heartbeat >= 7200:  # 2 hours
+            send_heartbeat(args.interval)
+            last_heartbeat = time.time()
 
         log.info("Sleeping %ss...\n", args.interval)
         time.sleep(args.interval)

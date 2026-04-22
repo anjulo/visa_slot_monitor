@@ -2,11 +2,11 @@ import json
 import logging
 import re
 from datetime import date, datetime
+import time
 from typing import Optional
 
 import undetected_chromedriver as uc
 
-from browser_session import navigate
 from config import CONFIG
 
 log = logging.getLogger(__name__)
@@ -33,15 +33,15 @@ def _api_get(driver: uc.Chrome, url: str) -> Optional[dict | list]:
     try:
         result = driver.execute_async_script(_JS_FETCH, url)
     except Exception as exc:
-        log.error("JS fetch error (%s): %s", url, exc)
+        log.debug("JS fetch error (%s): %s", url, exc)
         return None
     if not result or not isinstance(result, str):
-        log.warning("Empty response from %s", url)
+        log.debug("Empty response from %s", url)
         return None
     try:
         return json.loads(result)
     except json.JSONDecodeError:
-        log.warning("Non-JSON response from %s: %s", url, result[:200])
+        log.debug("Non-JSON response from %s: %s", url, result[:200])
         return None
 
 
@@ -51,14 +51,18 @@ def check_slots(driver: uc.Chrome, schedule_id: int, facility_id: Optional[int])
     Each slot is (date, available_time_count).
     fee_paid=False means the MRV fee hasn't been paid; the AIS site redirects to /payment in that case.
     """
-    navigate(driver, f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment", wait_seconds=2)
+    log.info("Checking for available dates and slots...")
+    driver.get(f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment")
+    time.sleep(3)
 
     if "payment" in driver.current_url:
-        log.debug("MRV Fee not paid — reading earliest date from page")
+        log.info("Redirected to payment page — MRV fee not paid. Scraping for earliest date ...")
         d = _scrape_earliest_from_page(driver)
         return ([(d, 0)] if d else []), False
 
-    log.debug("MRV Fee already paid — fetching available dates via API")
+    log.info("Perfect, MRV Fee has already been paid — getting available dates")
+    if facility_id is None: 
+        return [], True
     return _fetch_available_dates(driver, schedule_id, facility_id), True
 
 
@@ -69,12 +73,11 @@ def _scrape_earliest_from_page(driver: uc.Chrome) -> Optional[date]:
     """
     page = driver.page_source
 
-    match = re.search(r"([A-Za-z]+ \d{1,2}, \d{4})", page) # look for something like "March 15, 2026"
-    if match:
+    if match := re.search(r"([A-Za-z]+ \d{1,2}, \d{4})", page): # look for something like "March 15, 2026"
         raw = match.group(1)
         try:
             parsed = datetime.strptime(raw, "%B %d, %Y").date()
-            log.debug("Found date on page: %s", parsed)
+            log.info("Found date on page: %s", parsed)
             return parsed
         except ValueError:
             pass
@@ -99,7 +102,7 @@ def _fetch_available_dates(driver: uc.Chrome, schedule_id: int, facility_id: int
 
     data = _api_get(driver, days_url)
     if not isinstance(data, list) or not data:
-        log.debug("No available dates returned by API.")
+        log.debug("No available dates found!")
         return []
 
     available = []
@@ -109,13 +112,8 @@ def _fetch_available_dates(driver: uc.Chrome, schedule_id: int, facility_id: int
         except (ValueError, TypeError, KeyError):
             continue
 
-    if not available:
-        log.debug("No slots available.")
-        return []
-
-    available.sort()
-    top = available[:5]
-    log.debug("Found %d available date(s), showing earliest 5: %s", len(available), top)
+    top = sorted(available)[:5]
+    log.info("Found %d available date(s), showing earliest 5: %s", len(available), top)
 
     return [(d, _count_times(driver, schedule_id, facility_id, d)) for d in top]
 
@@ -126,9 +124,12 @@ def _count_times(driver: uc.Chrome, schedule_id: int, facility_id: int, d: date)
         f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment/"
         f"times/{facility_id}.json?date={d.isoformat()}&appointments[expedite]=false"
     )
-    data = _api_get(driver, times_url)
-    if not isinstance(data, dict):
-        return 0
-    count = len(data.get("available_times", []))
-    log.debug("Times for %s: %d available", d, count)
-    return count
+    for attempt in range(3):
+        data = _api_get(driver, times_url)
+        if isinstance(data, dict):
+            count = len(data.get("available_times", [])) # jfyi - some dates have "business_times" instead of "available_times".
+            log.info("Times for %s: %d available", d, count)
+            return count
+        log.warning("Unexpected times response for %s (%s), attempt %d/3", d, type(data).__name__, attempt + 1)
+        time.sleep(1)
+    return 0

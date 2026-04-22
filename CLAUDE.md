@@ -58,7 +58,7 @@ Night ping: between 23:00–06:00 local time, the same message is also sent dire
 
 ## Chrome / undetected_chromedriver
 
-`undetected_chromedriver` patches Chrome to bypass AIS bot-detection fingerprinting. Standard Selenium Chrome gets blocked. `use_subprocess=True` prevents Chrome from inheriting Python's signal handlers, avoiding zombies on Ctrl+C.
+`undetected_chromedriver` patches Chrome to bypass AIS bot-detection fingerprinting. Standard Selenium Chrome gets blocked. `use_subprocess=False` is required on macOS with Chrome 133+ — subprocess mode breaks the WebDriver session before the first navigation completes (ref: ultrafunkamsterdam/undetected-chromedriver#2295).
 
 ## Login verbosity
 
