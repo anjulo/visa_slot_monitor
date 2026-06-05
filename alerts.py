@@ -53,7 +53,7 @@ def _format_slots(
     slots: Slots,
     last_slots: Optional[Slots] = None,
     dates_changed: bool = False,
-    current_date: Optional[date] = None,
+    latest_cutoff: Optional[date] = None,
 ) -> str:
     last_counts = {d: n for d, n in last_slots} if last_slots else {}
     lines = []
@@ -62,15 +62,15 @@ def _format_slots(
         if count and not dates_changed and d in last_counts and count < last_counts[d]:
             slot_str += f" (was {last_counts[d]})"
         lines.append(f"{i}. {d.strftime('%A, %B %d')} · {slot_str}")
-    if current_date:
-        lines.append(f"{len(slots) + 1}. {current_date.strftime('%A, %B %d')} · ← your appt")
+    if latest_cutoff:
+        lines.append(f"{len(slots) + 1}. {latest_cutoff.strftime('%A, %B %d')} · ← your appt")
     return "\n".join(lines)
 
 
 def _build_alert(
     new_slots: Slots,
     last_slots: Optional[Slots],
-    current_date: Optional[date],
+    latest_cutoff: Optional[date],
     fee_paid: bool,
     schedule_id: int,
     dates_changed: bool,
@@ -82,8 +82,8 @@ def _build_alert(
         header = f"🟢 Earlier:  {last_earliest.strftime('%b %d')}  →  {new_earliest.strftime('%b %d')}"
     elif last_earliest and new_earliest >= last_earliest:
         header = f"🔴 Later:  {last_earliest.strftime('%b %d')}  →  {new_earliest.strftime('%b %d')}"
-    elif current_date:
-        days_earlier = (current_date - new_earliest).days
+    elif latest_cutoff:
+        days_earlier = (latest_cutoff - new_earliest).days
         header = f"🟢 {days_earlier} days earlier than your appointment"
     elif not dates_changed:
         header = "🔴 Slots filling up"
@@ -96,7 +96,7 @@ def _build_alert(
         footer_lines.append(f"💳 Pay → {CONFIG.base_url}/niv/schedule/{schedule_id}/payment")
     footer_lines.append(f"📅 Book → {appointment_url}")
 
-    slot_block = _format_slots(new_slots, last_slots, dates_changed, current_date)
+    slot_block = _format_slots(new_slots, last_slots, dates_changed, latest_cutoff)
 
     return "\n".join([
         "🚨 US Visa Slot — Ethiopia",
@@ -114,12 +114,17 @@ def alert_if_changed(
     last_slots: Optional[Slots],
     fee_paid: bool,
     schedule_id: int,
-    current_date: Optional[date] = None,
+    earliest_cutoff: Optional[date] = None,
+    latest_cutoff: Optional[date] = None,
 ) -> Optional[Slots]:
     """Compare new_slots to last_slots, send a Telegram alert on date changes, and return the latest value."""
     all_available_earliest = new_slots[0][0] if new_slots else None
-    if current_date:
-        new_slots = [(d, n) for d, n in new_slots if d < current_date]
+    if earliest_cutoff or latest_cutoff:
+        new_slots = [
+            (d, n) for d, n in new_slots
+            if (not earliest_cutoff or d >= earliest_cutoff)
+            and (not latest_cutoff or d < latest_cutoff)
+        ]
 
     should_send, dates_changed, log_msg = _detect_change(new_slots, last_slots)
 
@@ -132,13 +137,13 @@ def alert_if_changed(
 
     if log_msg:
         log.info(log_msg)
-    elif current_date and all_available_earliest:
-        log.warning("No slots earlier than appointment (%s) — earliest available: %s", current_date, all_available_earliest)
+    elif (earliest_cutoff or latest_cutoff) and all_available_earliest:
+        log.warning("No slots within cutoffs — earliest available: %s", all_available_earliest)
     else:
         log.warning("No appointments available")
 
     if new_earliest:
-        body = _build_alert(new_slots, last_slots, current_date, fee_paid, schedule_id, dates_changed)
+        body = _build_alert(new_slots, last_slots, latest_cutoff, fee_paid, schedule_id, dates_changed)
         send_telegram(body)
         if _is_nighttime() and CONFIG.night_ping_targets:
             for target in CONFIG.night_ping_targets:

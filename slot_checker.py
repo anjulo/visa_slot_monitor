@@ -15,7 +15,10 @@ log = logging.getLogger(__name__)
 # a plain requests.get can't access that cookie since it lives in the browser jar
 _JS_FETCH = """
 const [url, callback] = arguments;
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), 20000);
 fetch(url, {
+    signal: controller.signal,
     headers: {
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest"
@@ -23,8 +26,8 @@ fetch(url, {
     credentials: "include"
 })
 .then(r => r.text())
-.then(callback)
-.catch(() => callback(null));
+.then(t => { clearTimeout(timer); callback(t); })
+.catch(() => { clearTimeout(timer); callback(null); });
 """
 
 
@@ -124,12 +127,12 @@ def _count_times(driver: uc.Chrome, schedule_id: int, facility_id: int, d: date)
         f"{CONFIG.base_url}/niv/schedule/{schedule_id}/appointment/"
         f"times/{facility_id}.json?date={d.isoformat()}&appointments[expedite]=false"
     )
-    for attempt in range(3):
+    for attempt in range(2):
         data = _api_get(driver, times_url)
         if isinstance(data, dict):
             count = len(data.get("available_times", [])) # jfyi - some dates have "business_times" instead of "available_times".
             log.info("Times for %s: %d available", d, count)
             return count
-        log.warning("Unexpected times response for %s (%s), attempt %d/3", d, type(data).__name__, attempt + 1)
+        log.warning("Unexpected times response for %s (%s), attempt %d/2", d, type(data).__name__, attempt + 1)
         time.sleep(1)
     return 0

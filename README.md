@@ -12,7 +12,7 @@ The script auto-detects which flow your account is in:
 
 **Paid** — Fee paid. Calls the AIS calendar API and posts to your channel when the earliest open slot changes.
 
-If you have a current appointment and only want to be alerted for earlier slots, pass `--current-date`.
+Use `--earliest` and/or `--latest` to restrict which slots trigger alerts (e.g. only alert for slots between a minimum date and your current appointment).
 
 ---
 
@@ -22,6 +22,7 @@ If you have a current appointment and only want to be alerted for earlier slots,
 
 - **Python 3.10 or 3.11** (required by `undetected-chromedriver` — does not support Python 3.12+)
 - `pip` and `git`
+- **macOS:** `caffeinate` (built-in) — prevents the machine from sleeping during monitoring
 
 ### Using a Virtual Environment (venv) — Unix/Linux/macOS
 
@@ -77,8 +78,14 @@ Add your bot as an **administrator** of the channel with permission to **post me
 # Monitor your schedule and auto-detect unpaid vs paid flow
 python3 visa_slot_monitor.py
 
-# Only alert if a slot is earlier than your current appointment
-python3 visa_slot_monitor.py --current-date 2026-12-31
+# Only alert for slots earlier than your current appointment
+python3 visa_slot_monitor.py --latest 2026-12-31
+
+# Only alert for slots within a specific window
+python3 visa_slot_monitor.py --earliest 2026-08-01 --latest 2026-12-31
+
+# Recommended: wrap with caffeinate (macOS) to prevent the machine from sleeping
+caffeinate -i python3.11 visa_slot_monitor.py --earliest 2026-07-26 --latest 2026-09-20
 ```
 
 Set both `SCHEDULE_ID` and `FACILITY_ID` in `.env`. `FACILITY_ID` is required when paid mode is detected.
@@ -87,7 +94,8 @@ Set both `SCHEDULE_ID` and `FACILITY_ID` in `.env`. `FACILITY_ID` is required wh
 
 | Flag | Description |
 |---|---|
-| `--current-date` | `YYYY-MM-DD`. If set, alerts only for slots earlier than this date. |
+| `--earliest YYYY-MM-DD` | Ignore slots before this date (lower bound, inclusive). |
+| `--latest YYYY-MM-DD` | Ignore slots on or after this date (upper bound, exclusive). Typically your current appointment. |
 | `--interval` | Seconds between checks. |
 | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`). |
 | `--no-headless` | Show the browser window. Useful if login keeps failing. |

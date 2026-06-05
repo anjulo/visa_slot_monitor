@@ -12,7 +12,7 @@ Polls `ais.usvisa-info.com/en-et` for US visa appointment availability in Ethiop
 | `browser_session.py` | `make_driver()`, `login()`, `navigate()`. All Selenium/Chrome logic lives here. |
 | `slot_checker.py` | `check_slots()` — detects fee-paid state, calls the right scrape/API path. |
 | `alerts.py` | `alert_if_changed()` — change detection, Telegram formatting, night pings. |
-| `telegram_bot.py` | `send_telegram()`, `/status` command listener, shared bot state. |
+| `telegram_bot.py` | `send_telegram()`, Telegram command listener, shared bot state. |
 | `config.py` | Loads `.env`, validates required fields, exposes a frozen `CONFIG` singleton. |
 
 ## Two modes — fee paid vs. not paid
@@ -51,7 +51,28 @@ Up to 5 earliest dates returned. Slot count is 0 in fee-not-paid mode.
 
 `alert_if_changed()` only fires when the **set of available dates changes**. Same dates, even with different slot counts, do not re-alert (avoids channel spam).
 
-Night ping: between 23:00–06:00 local time, the same message is also sent directly to each chat ID in `NIGHT_PING_TARGETS`. The user configures Telegram to ring loudly on those chats.
+Two optional date cutoffs filter which slots are considered:
+- `--earliest YYYY-MM-DD` — ignore slots before this date (lower bound, inclusive)
+- `--latest YYYY-MM-DD` — ignore slots on or after this date (upper bound, exclusive; typically your current appointment)
+
+Alert format includes a numbered slot list. When `--latest` is set, that date is appended as the last numbered item (`← your appt`) so the gap is visible at a glance.
+
+Night ping: between 20:00–09:00 local time, the same message is also sent directly to each chat ID in `NIGHT_PING_TARGETS`. The user configures Telegram to ring loudly on those chats.
+
+## Telegram bot commands
+
+All commands are handled by a background long-polling thread in `telegram_bot.py`. Only messages from `TELEGRAM_CHANNEL_ID` are accepted.
+
+| Command | Effect |
+|---------|--------|
+| `/status` | Full status: uptime, last/next check, interval, fee state, cutoff dates, current slots |
+| `/slots` | All available dates from the last check (ignores cutoffs) |
+| `/pause` | Stops the check loop (main loop polls every 15s waiting for `/resume`) |
+| `/resume` | Restarts the check loop |
+| `/interval <min>` | Sets check interval in minutes (minimum 5) |
+| `/help` | Lists all commands |
+
+Shared state (`_bot_state`) in `telegram_bot.py` is updated by the main loop via `update_bot_state()` after every check cycle. `is_paused()` and `get_interval()` are read by the main loop each iteration.
 
 ## `FACILITY_ID` requirement
 

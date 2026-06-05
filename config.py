@@ -49,7 +49,7 @@ def _build_config() -> AppConfig:
         ais_password=os.getenv("AIS_PASSWORD", ""),
         schedule_id=_read_int("SCHEDULE_ID", "0"),
         facility_id=_read_int("FACILITY_ID", "0"),
-        check_interval=_read_int("CHECK_INTERVAL", "300"),
+        check_interval=_read_int("CHECK_INTERVAL", "900"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_channel_id=os.getenv("TELEGRAM_CHANNEL_ID", "").strip(),
         night_ping_targets=night_ping_targets,
